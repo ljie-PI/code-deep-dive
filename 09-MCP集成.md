@@ -22,6 +22,51 @@ MCP 集成遵循三方协作模型：
 
 MCP 工具从配置文件到被模型调用，需要经过五个阶段。这是一条严格有序的流水线，每个阶段的输出是下一个阶段的输入。
 
+```mermaid
+%%{init: {'theme': 'neutral'}}%%
+flowchart TB
+    subgraph S1["阶段一：配置合并"]
+        direction LR
+        Plugin["plugin"] --> Merge
+        User["user"] --> Merge
+        Project["project<br/>(approved)"] --> Merge
+        Local["local"] --> Merge
+        Dynamic["dynamic<br/>最高优先级"] --> Merge
+        Enterprise["enterprise"] -.->|"排他模式<br/>完全排除其他"| Merge
+        Merge["getAllMcpConfigs()<br/>Object.assign 覆盖"]
+    end
+
+    subgraph S2["阶段二：传输层建立"]
+        direction LR
+        Merge --> Connect["connectToServer()<br/>memoize 缓存"]
+        Connect --> Stdio["stdio<br/>子进程"]
+        Connect --> SSE["sse/http<br/>远程"]
+        Connect --> WS["ws/ws-ide<br/>WebSocket"]
+        Connect --> Proxy["claudeai-proxy<br/>OAuth"]
+    end
+
+    subgraph S3["阶段三：工具发现"]
+        direction LR
+        Stdio & SSE & WS & Proxy --> Fetch["fetchToolsForClient()<br/>tools/list<br/>LRU 缓存(20)"]
+    end
+
+    subgraph S4["阶段四：名称构建"]
+        direction LR
+        Fetch --> Name["buildMcpToolName()<br/>mcp__server__tool"]
+        Name --> Normalize["normalizeNameForMCP()<br/>字符替换"]
+        Name --> Truncate["描述截断<br/>2048 字符"]
+    end
+
+    subgraph S5["阶段五：工具池合并"]
+        direction LR
+        Normalize & Truncate --> Filter["filterToolsByDenyRules()"]
+        Filter --> Pool["assembleToolPool()<br/>分区排序 + uniqBy 去重"]
+        BuiltIn["内置工具<br/>(前缀位置)"] --> Pool
+    end
+
+    S1 --> S2 --> S3 --> S4 --> S5
+```
+
 ### 阶段一：配置合并
 
 `getAllMcpConfigs()` 函数（config.ts）负责从多种来源收集 MCP 服务器定义。系统定义了七种配置作用域（`ConfigScopeSchema`，types.ts）：
@@ -126,6 +171,34 @@ SSE 和 HTTP 传输都通过 `ClaudeAuthProvider` 实现 OAuth 2.0 认证。`Cla
 ### 连接状态
 
 `MCPServerConnection` 类型（types.ts）定义了五种连接状态：
+
+```mermaid
+%%{init: {'theme': 'neutral'}}%%
+stateDiagram-v2
+    [*] --> pending : connectToServer()
+    pending --> connected : 连接成功
+    pending --> failed : 连接失败
+    pending --> needs_auth : 401 Unauthorized
+
+    connected --> failed : 连续 3 次终端错误<br/>(ECONNRESET/ETIMEDOUT/EPIPE)
+    connected --> needs_auth : session 过期<br/>(404 + JSON-RPC -32001)
+    connected --> disabled : 用户手动禁用
+
+    failed --> pending : 自动重连
+    needs_auth --> pending : 用户完成 OAuth
+    disabled --> pending : 用户重新启用
+
+    note right of connected
+        正常状态
+        工具可用
+        缓存联动清除
+    end note
+
+    note right of failed
+        isTerminalConnectionError()
+        closeTransportAndRejectPending()
+    end note
+```
 
 | 状态 | 含义 |
 |------|------|

@@ -263,6 +263,47 @@ Hook 支持三种执行模式：
 
 ## 10.7 七阶段执行流水线
 
+```mermaid
+%%{init: {'theme': 'neutral'}}%%
+sequenceDiagram
+    participant Tool as 工具调用
+    participant Engine as Hook 引擎
+    participant Pre as PreToolUse Hooks
+    participant Perm as 权限系统
+    participant Exec as 工具执行
+    participant Post as PostToolUse Hooks
+
+    Tool->>Engine: 工具调用请求
+    
+    Note over Engine: Stage 0: hasHookForEvent() 快速检查
+    Note over Engine: Stage 1: shouldSkipHookDueToTrust()
+    Note over Engine: Stage 2: getMatchingHooks() 双层过滤
+    Note over Engine: Stage 3: hookDedupKey() 去重
+    
+    Engine->>Pre: Stage 4: 并行执行匹配的 PreToolUse hooks
+    Pre-->>Engine: Stage 5-6: parseHookOutput() + 结果聚合
+    
+    alt Hook 返回 deny
+        Engine-->>Tool: 拒绝执行
+    else Hook 返回 allow
+        Engine->>Perm: resolveHookPermissionDecision()
+        Note over Perm: Hook deny > Settings deny ><br/>Settings ask > Hook allow
+        alt 权限通过
+            Perm->>Exec: 执行工具
+            Exec-->>Engine: 工具结果
+            Engine->>Post: 并行执行 PostToolUse hooks
+            Post-->>Engine: additionalContext 合并
+            Engine-->>Tool: 最终结果
+        else 权限拒绝
+            Perm-->>Tool: 拒绝执行
+        end
+    else 无 Hook 决策
+        Engine->>Perm: 走正常权限流程
+        Perm->>Exec: 执行工具
+        Exec-->>Tool: 返回结果
+    end
+```
+
 `executeHooks()` (`hooks.ts:2090-`) 实现了 Stage 0 到 Stage 6 的七阶段流水线：
 
 | Stage | 函数/逻辑 | 说明 |
@@ -325,6 +366,42 @@ export type LoadedFrom =
 ### 五层加载优先级
 
 `getSkillDirCommands()` (`loadSkillsDir.ts:638-804`) 从五个来源发现 Skills：
+
+```mermaid
+%%{init: {'theme': 'neutral'}}%%
+graph TB
+    subgraph Priority["Skill 五层加载优先级（高→低）"]
+        direction TB
+        MCP["MCP Skills<br/>appState.mcp.commands<br/>loadedFrom: 'mcp'"]
+        Managed["管理策略层<br/>getManagedFilePath()/.claude/skills/<br/>loadedFrom: 'managed'"]
+        UserLayer["用户层<br/>~/.claude/skills/<br/>loadedFrom: 'skills'"]
+        ProjectLayer["项目层<br/>getProjectDirsUpToHome('skills', cwd)<br/>loadedFrom: 'skills'"]
+        Bundled["内置 Skills<br/>src/skills/bundled/<br/>loadedFrom: 'bundled'"]
+    end
+
+    MCP -->|"禁止 Shell 执行"| Merge
+    Managed --> Merge
+    UserLayer --> Merge
+    ProjectLayer --> Merge
+    Bundled --> Merge
+
+    subgraph Load["三阶段加载流程"]
+        direction LR
+        Scan["启动扫描<br/>loadSkillsFromSkillsDir()<br/>frontmatter 解析 + realpath 去重"]
+        Discover["动态发现<br/>discoverSkillDirsForPaths()<br/>向上遍历 .claude/skills/"]
+        Activate["条件激活<br/>activateConditionalSkillsForPaths()<br/>paths 字段匹配"]
+        Scan --> Discover --> Activate
+    end
+
+    Merge["合并去重"] --> Load
+
+    Load --> Budget["Token 预算控制<br/>formatCommandsWithinBudget()<br/>上下文窗口 1%"]
+    Budget --> Inject["注入系统提示词"]
+
+    style MCP fill:#e1f5fe
+    style Managed fill:#fff3e0
+    style Bundled fill:#e8f5e9
+```
 
 | 优先级 | 来源 | 路径 | LoadedFrom |
 |--------|------|------|-----------|
