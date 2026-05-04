@@ -223,18 +223,20 @@ Session A (first-message) → Session B (plan-to-execute) → Session C (reset-r
 
 ```
 packages/core/src/db/
-├── connection.ts          # 连接管理，自动检测 SQLite/PostgreSQL
+├── connection.ts              # 连接管理，自动检测 SQLite/PostgreSQL
 ├── adapters/
-│   ├── types.ts           # IDatabase + SqlDialect 接口
-│   ├── sqlite.ts          # SQLite 适配器（bun:sqlite）
-│   └── postgres.ts        # PostgreSQL 适配器（pg）
-├── codebases.ts           # 代码库 CRUD
-├── conversations.ts       # 会话 CRUD + 软删除
-├── sessions.ts            # Session CRUD + 审计链
+│   ├── types.ts               # IDatabase + SqlDialect 接口
+│   ├── sqlite.ts              # SQLite 适配器（bun:sqlite）
+│   └── postgres.ts            # PostgreSQL 适配器（pg）
+├── codebases.ts               # 代码库 CRUD
+├── env-vars.ts                # 代码库环境变量 CRUD（v0.3.x 新增独立模块）
+├── conversations.ts           # 会话 CRUD + 软删除
+├── sessions.ts                # Session CRUD + 审计链
 ├── isolation-environments.ts  # 隔离环境 CRUD
-├── workflows.ts           # 工作流运行 CRUD
-├── workflow-events.ts     # 工作流事件 CRUD
-└── messages.ts            # 消息 CRUD
+├── workflows.ts               # 工作流运行 CRUD
+├── workflow-events.ts         # 工作流事件 CRUD
+├── messages.ts                # 消息 CRUD
+└── index.ts                   # 统一导出
 ```
 
 **IDatabase 接口**：
@@ -272,10 +274,11 @@ interface IDatabase {
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `migrations/000_combined.sql` | 315 | 完整数据库 schema（幂等） |
-| `packages/core/src/db/connection.ts` | ~200 | 数据库连接管理和自动检测 |
-| `packages/core/src/db/workflows.ts` | 930 | 工作流运行 CRUD（最大的 DB 模块） |
-| `packages/core/src/db/conversations.ts` | ~300 | 会话 CRUD + 软删除 |
-| `packages/core/src/db/sessions.ts` | ~250 | Session CRUD + 审计链 |
-| `packages/core/src/db/isolation-environments.ts` | ~200 | 隔离环境 CRUD |
-| `packages/core/src/db/messages.ts` | ~150 | 消息持久化 |
+| `migrations/000_combined.sql` | 314 | 完整数据库 schema（幂等） |
+| `packages/core/src/db/connection.ts` | 116 | 数据库连接管理和自动检测 |
+| `packages/core/src/db/workflows.ts` | 1,007 | 工作流运行 CRUD（最大的 DB 模块） |
+| `packages/core/src/db/isolation-environments.ts` | 296 | 隔离环境 CRUD |
+| `packages/core/src/db/conversations.ts` | 259 | 会话 CRUD + 软删除 |
+| `packages/core/src/db/sessions.ts` | 211 | Session CRUD + 审计链 |
+| `packages/core/src/db/messages.ts` | 97 | 消息持久化 |
+| `packages/core/src/db/env-vars.ts` | 55 | 代码库环境变量 CRUD（v0.3.x 拆分） |

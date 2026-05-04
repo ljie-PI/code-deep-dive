@@ -23,7 +23,7 @@ graph TD
     end
 
     subgraph Isolation["@archon/isolation"]
-        Resolver["IsolationResolver<br/>7 步解析流程"]
+        Resolver["IsolationResolver<br/>6 步解析流程"]
         Factory["getIsolationProvider()<br/>configureIsolation()"]
         Provider["WorktreeProvider<br/>唯一实现"]
         ErrorClassifier["classifyIsolationError()"]
@@ -53,99 +53,115 @@ graph TD
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `types.ts` | 308 | 接口和类型定义 |
-| `errors.ts` | 105 | 错误分类器和 IsolationBlockedError |
+| `types.ts` | 327 | 接口和类型定义 |
+| `errors.ts` | 141 | 错误分类器和 IsolationBlockedError |
 | `factory.ts` | 38 | Provider 工厂函数 |
-| `resolver.ts` | 451 | 7 步隔离解析流程 |
+| `resolver.ts` | 561 | 6 步隔离解析流程 |
 | `store.ts` | 17 | IIsolationStore 接口定义 |
 | `worktree-copy.ts` | 179 | 文件复制工具 |
 | `pr-state.ts` | 91 | PR 状态检查 |
-| `providers/worktree.ts` | 1,017 | WorktreeProvider（唯一实现） |
-| `index.ts` | ~40 | 统一导出 |
+| `providers/worktree.ts` | 1,227 | WorktreeProvider（唯一实现） |
+| `index.ts` | 62 | 统一导出 |
 
 ## 4.4 核心类型
 
 ```typescript
-// 隔离请求 — 描述需要什么样的隔离
-interface IsolationRequest {
-  codebaseId: string;
-  codebaseName: string;
-  sourcePath: string;       // 仓库源路径
-  workflowType: string;     // 'issue' | 'pr' | 'review' | 'thread' | 'task'
-  workflowId: string;       // '42', 'pr-99', 'thread-abc123'
-  branchName?: string;      // 可选显式分支名
-  fromBranch?: string;      // 可选基分支
-  platform?: string;        // 创建平台
+// 调用方传给 resolver 的请求 — 描述会话上下文
+interface ResolveRequest {
+  existingEnvId: string | null;
+  codebase: { id: string; defaultCwd: string; name: string } | null;
+  hints?: IsolationHints;
+  platformType: string;
 }
 
 // 隔离提示 — 轻量级上下文，由适配器提供
 interface IsolationHints {
-  existingEnvId?: string;   // 已有环境 ID
-  workflowType?: string;
+  workflowType?: 'issue' | 'pr' | 'review' | 'thread' | 'task';
   workflowId?: string;
-  branchName?: string;
-  fromBranch?: string;
-  linkedIssueNumbers?: number[];  // PR 关联的 issue
+
+  // PR 专用
+  prBranch?: BranchName;
+  prSha?: string;
+  isForkPR?: boolean;
+
+  // task 专用：新建 worktree 的起点分支
+  fromBranch?: BranchName;
+
+  // 期望的基分支 — 用于复用时的 merge-base 校验
+  baseBranch?: BranchName;
+
+  // 跨引用提示（PR 关联 issue 等）
+  linkedIssues?: number[];
+  linkedPRs?: number[];
+
+  suggestedBranch?: string;
 }
 
-// 隔离结果
-interface IsolationResolution {
-  status: 'created' | 'reused' | 'none' | 'blocked';
-  environment?: IsolationEnvironment;
-  workingPath?: string;
-}
+// 隔离结果（判别联合）
+type IsolationResolution =
+  | { status: 'resolved'; env: IsolationEnvironmentRow; cwd: string; method: ResolutionMethod; warnings?: string[] }
+  | { status: 'stale_cleaned'; previousEnvId: string }
+  | { status: 'none'; cwd: string }
+  | { status: 'blocked'; reason: 'creation_failed'; userMessage: string };
+
+// 解析方法 — 命中了哪一步
+type ResolutionMethod =
+  | { type: 'existing' }
+  | { type: 'workflow_reuse' }
+  | { type: 'linked_issue_reuse'; issueNumber: number }
+  | { type: 'branch_adoption'; branch: string }
+  | { type: 'created'; autoCleanedCount?: number };
 ```
 
-## 4.5 IsolationResolver — 7 步解析流程
+## 4.5 IsolationResolver — 6 步解析流程
 
-`resolver.ts` 是隔离系统的核心决策引擎。当收到隔离请求时，按以下 7 步顺序尝试：
+`resolver.ts` 是隔离系统的核心决策引擎。当收到隔离请求时，按以下 6 步顺序尝试：
 
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%
 flowchart TD
     Start["开始解析"] --> Step1
     Step1["1. 已有环境？<br/>existingEnvId"] -->|有| Check1{"Worktree 还在磁盘上？"}
-    Check1 -->|是| Reuse1["复用（status: reused）"]
-    Check1 -->|否| Step3
+    Check1 -->|是| Reuse1["复用（status: resolved/existing）"]
+    Check1 -->|否| Stale["status: stale_cleaned<br/>调用方应清空引用并重试"]
     Step1 -->|无| Step2
 
-    Step2["2. 无代码库？<br/>codebaseId 为空"] -->|是| None["跳过隔离（status: none）"]
+    Step2["2. 无代码库？<br/>codebase 为空"] -->|是| None["跳过隔离（status: none, cwd: /workspace）"]
     Step2 -->|否| Step3
 
-    Step3["3. 工作流复用<br/>同 (codebaseId, workflowType, workflowId)"] -->|找到| Reuse3["复用已有环境"]
+    Step3["3. 工作流复用<br/>同 (codebaseId, workflowType, workflowId)"] -->|找到| Reuse3["复用已有环境（method: workflow_reuse）"]
     Step3 -->|未找到| Step4
 
-    Step4["4. 关联 Issue 共享<br/>PR 复用 Issue 的 worktree"] -->|找到| Reuse4["复用 Issue 环境"]
+    Step4["4. 关联 Issue 共享<br/>PR 复用 linkedIssues 的 worktree"] -->|找到| Reuse4["复用 Issue 环境"]
     Step4 -->|未找到| Step5
 
-    Step5["5. PR 分支收养<br/>按分支名查找现有 worktree"] -->|找到| Reuse5["复用已有 worktree"]
+    Step5["5. PR 分支收养<br/>findWorktreeByBranch(prBranch)"] -->|找到| Reuse5["收养已有 worktree"]
     Step5 -->|未找到| Step6
 
-    Step6["6. 容量检查<br/>当前数 >= maxWorktrees (25)?"] -->|超限| Cleanup{"makeRoom() 清理"}
-    Cleanup -->|成功| Step7
-    Cleanup -->|失败| Blocked["阻塞（status: blocked）"]
-    Step6 -->|未超限| Step7
-
-    Step7["7. 创建新环境<br/>provider.create()"] --> Created["新建（status: created）"]
+    Step6["6. 创建新环境<br/>provider.create()"] --> Created["新建（status: resolved）"]
 ```
 
 ### 步骤详解
 
 | 步骤 | 条件 | 行为 |
 |------|------|------|
-| **1. 已有环境** | `existingEnvId` 非空 | 验证 worktree 还在磁盘上 → 复用 |
-| **2. 无代码库** | 没有关联的 codebase | 返回 `status: 'none'`，跳过隔离 |
-| **3. 工作流复用** | 同 `(codebaseId, workflowType, workflowId)` 有活跃环境 | 复用该环境 |
-| **4. 关联 Issue** | PR 有 linked issues，检查 issue 是否有环境 | PR 复用 issue 的 worktree |
-| **5. PR 分支收养** | 按分支名 `findWorktreeByBranch()` 查找 | 收养已有 worktree |
-| **6. 容量检查** | 活跃环境数 >= `maxWorktrees`（默认 25） | 调用 `makeRoom()` 尝试清理最旧的已销毁环境 |
-| **7. 创建新环境** | 前述步骤都未命中 | `provider.create()` → `store.create()` |
+| **1. 已有环境** | `existingEnvId` 非空 | 验证 worktree 还在磁盘上 → 复用；不在则返回 `status: 'stale_cleaned'` 让调用方清理引用并重试 |
+| **2. 无代码库** | 没有关联的 codebase | 返回 `status: 'none', cwd: '/workspace'`，跳过隔离 |
+| **3. 工作流复用** | 同 `(codebaseId, workflowType, workflowId)` 有活跃环境 | 复用该环境（`method.type = 'workflow_reuse'`） |
+| **4. 关联 Issue** | `hints.linkedIssues` 非空 | PR 复用 issue 的 worktree |
+| **5. PR 分支收养** | `hints.prBranch` 非空 | 按分支名 `findWorktreeByBranch()` 收养已有 worktree |
+| **6. 创建新环境** | 前述步骤都未命中 | `provider.create()` → `store.create()` |
 
-**容错设计**：如果第 7 步 `store.create()` 失败但 `provider.create()` 已成功，会 best-effort 清理孤立的 worktree，然后重新抛出异常。
+> **v0.3.x 重要变化**：旧版第 6 步"容量检查 (maxWorktrees=25)"已被移除。容量管理改为：
+> - `IsolationResolverDeps.cleanup?.makeRoom()` 是**可选注入**，由调用方（通常是后台清理服务或 CLI）按需触发；
+> - 新增 `staleThresholdDays`（默认 14 天）控制陈旧环境判定阈值；
+> - 解析器自身**不再有硬编码上限**，避免对 worktree 创建路径增加同步阻塞。
+
+**容错设计**：如果第 6 步 `store.create()` 失败但 `provider.create()` 已成功，会 best-effort 清理孤立的 worktree（通过 `markDestroyedBestEffort`），然后重新抛出异常。
 
 ## 4.6 WorktreeProvider
 
-`providers/worktree.ts`（1,017 行）是 `IIsolationProvider` 的唯一实现。
+`providers/worktree.ts`（1,227 行）是 `IIsolationProvider` 的唯一实现。
 
 ### 创建流程
 
@@ -214,16 +230,33 @@ try {
 
 ```typescript
 interface IIsolationStore {
-  create(env: IsolationEnvironment): Promise<void>;
-  findActive(codebaseId: string, workflowType: string, workflowId: string): Promise<IsolationEnvironment | null>;
-  findByCodebase(codebaseId: string, status?: string): Promise<IsolationEnvironment[]>;
-  markDestroyed(envId: string): Promise<void>;
-  markDestroyedBestEffort(envId: string): Promise<void>;  // 不抛异常
-  countActive(codebaseId: string): Promise<number>;
+  getById(id: string): Promise<IsolationEnvironmentRow | null>;
+  findActiveByWorkflow(
+    codebaseId: string,
+    workflowType: IsolationWorkflowType,
+    workflowId: string
+  ): Promise<IsolationEnvironmentRow | null>;
+  create(env: CreateEnvironmentParams): Promise<IsolationEnvironmentRow>;
+  updateStatus(id: string, status: 'active' | 'destroyed'): Promise<void>;
+  countActiveByCodebase(codebaseId: string): Promise<number>;
 }
 ```
 
-`markDestroyedBestEffort()` 记录错误但不抛异常——清理操作不应阻塞主流程。
+容量回收／陈旧清理改由 `IsolationResolverDeps.cleanup`（可选注入）承担：
+
+```typescript
+interface IsolationResolverDeps {
+  store: IIsolationStore;
+  provider: IIsolationProvider;
+  cleanup?: {
+    makeRoom: (codebaseId: string, repoPath: string) => Promise<{ removedCount: number }>;
+    getBreakdown: (codebaseId: string, repoPath: string) => Promise<WorktreeStatusBreakdown>;
+  };
+  staleThresholdDays?: number;  // 默认 14
+}
+```
+
+`markDestroyedBestEffort()` 这种"记录错误但不抛异常"的语义现在通过 `try/catch` 包裹 `updateStatus(id, 'destroyed')` 实现 — 清理操作不应阻塞主流程。
 
 ## 4.9 `.archon/` 同步
 
@@ -235,7 +268,7 @@ interface IIsolationStore {
 |------|------|
 | 以工作为中心而非会话为中心 | 同一个 issue 的 worktree 可以跨平台共享（GitHub → Slack） |
 | 每次 @mention 都创建 worktree | 简洁优先于效率；worktree 创建成本低 |
-| maxWorktrees 默认 25 | 防止磁盘耗尽，超限时自动清理最旧环境 |
+| 取消硬编码 maxWorktrees（v0.3.x） | 避免阻塞同步路径；改由可选 `cleanup.makeRoom()` 与 `staleThresholdDays`（默认 14 天）异步管理 |
 | 部分唯一索引 `WHERE status = 'active'` | 允许同一工作流有多个已销毁的历史环境 |
 | syncWorkspace 在创建前执行 | 确保 worktree 基于最新代码 |
 | store.create() 失败时清理 worktree | 防止孤立的 worktree 占用磁盘 |
@@ -244,11 +277,11 @@ interface IIsolationStore {
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `packages/isolation/src/resolver.ts` | 451 | 7 步隔离解析引擎 |
-| `packages/isolation/src/providers/worktree.ts` | 1,017 | Worktree 创建/销毁 |
-| `packages/isolation/src/types.ts` | 308 | 核心接口定义 |
+| `packages/isolation/src/resolver.ts` | 561 | 6 步隔离解析引擎 |
+| `packages/isolation/src/providers/worktree.ts` | 1,227 | Worktree 创建/销毁 |
+| `packages/isolation/src/types.ts` | 327 | 核心接口定义 |
 | `packages/isolation/src/worktree-copy.ts` | 179 | 文件复制工具 |
-| `packages/isolation/src/errors.ts` | 105 | 错误分类和 IsolationBlockedError |
+| `packages/isolation/src/errors.ts` | 141 | 错误分类和 IsolationBlockedError |
 | `packages/isolation/src/pr-state.ts` | 91 | PR 状态检查 |
 | `packages/isolation/src/store.ts` | 17 | IIsolationStore 接口 |
 | `packages/isolation/src/factory.ts` | 38 | Provider 工厂 |

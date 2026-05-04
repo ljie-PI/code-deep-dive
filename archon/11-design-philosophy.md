@@ -85,11 +85,14 @@
 2. 在 `packages/server/src/index.ts` 中条件初始化
 3. 注册 `onMessage` 回调到 `handleMessage()`
 
-### 添加新 AI 客户端
+### 添加新 AI Provider
 
-1. 实现 `IAssistantClient` 接口
-2. 在 `packages/core/src/clients/factory.ts` 中注册
-3. 返回 `AsyncGenerator<MessageChunk>` 流
+1. 在 `packages/providers/src/<provider-id>/` 下新建 provider 实现：
+   - `provider.ts`：实现 `IAgentProvider`（`sendQuery`、`getType`、`getCapabilities`）
+   - `capabilities.ts`：声明支持的模型与功能（`output_format`、`hooks`、`mcp`、`skills` 等）
+   - 可选：`binary-resolver.ts`、`config.ts`
+2. 在 `packages/providers/src/registry.ts` 的 `registerBuiltinProviders()` 中注册（或社区 provider 通过自己的 `registration.ts` 暴露注册函数，由调用方按需调用）
+3. `sendQuery()` 必须返回 `AsyncGenerator<MessageChunk>` 流
 
 ### 添加新工作流节点类型
 
@@ -113,15 +116,16 @@
 
 ## 11.4 安全设计
 
-### Env Leak Gate
+### Env Leak Gate ⚠️ 当前状态
 
-防止 AI subprocess 继承目标仓库的敏感环境变量：
+**设计目标**：防止 AI subprocess 继承目标仓库的敏感环境变量。
 
-```
-启动时扫描 → 发现 .env 中的敏感 key → 阻止 AI 访问
-  → 用户可通过 --allow-env-keys 或 PATCH /api/codebases/:id 授权
-  → 授权以 warn 级别审计日志记录
-```
+**当前实现状态（v0.3.x）**：
+- 数据库层面的 `allow_env_keys` 同意位仍保留，PATCH `/api/codebases/:id` 仍可设置；
+- 但运行时的"启动扫描 + 主动拦截"已在 provider 抽离时被移除（参见 `packages/providers/src/claude/provider.ts:921` 的 `TODO(#1135)`）；
+- 旧版 `packages/core/src/utils/env-leak-scanner.ts` 已删除。
+
+也就是说，`allow_env_keys = false` 当前并不会阻止 Claude/Codex subprocess 继承父进程的 env，仅作为 UI 同意位记录。**重新启用主动拦截是 issue #1135 的待办项**。在此之前，请确保通过 CLI/服务器进程本身的环境（而非目标仓库的 `.env`）来传递敏感变量，并依靠 `stripCwdEnv()`（仍然有效）防止 CWD `.env` 自动加载。
 
 ### Webhook 签名验证
 
@@ -143,8 +147,10 @@
 
 | 文件 | 职责 |
 |------|------|
-| `packages/core/src/types/index.ts` | IPlatformAdapter + IAssistantClient 接口 |
+| `packages/core/src/types/index.ts` | IPlatformAdapter 接口 |
+| `packages/providers/src/types.ts` | IAgentProvider / ProviderCapabilities 接口 |
+| `packages/providers/src/registry.ts` | Provider 注册表（添加新 AI Provider 的入口） |
 | `packages/workflows/src/deps.ts` | WorkflowDeps 依赖注入类型 |
 | `packages/workflows/src/schemas/dag-node.ts` | DAG 节点类型系统 |
 | `packages/paths/src/strip-cwd-env.ts` | 环境变量安全清洗 |
-| `packages/core/src/utils/env-leak-scanner.ts` | 敏感 key 扫描 |
+| `packages/providers/src/claude/provider.ts` | ClaudeProvider（含 `TODO(#1135)` env-leak 复活点） |

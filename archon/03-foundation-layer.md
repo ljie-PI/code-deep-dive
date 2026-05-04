@@ -17,13 +17,15 @@
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `archon-paths.ts` | 414 | 全部目录路径工具函数 |
-| `logger.ts` | 120 | Pino logger 工厂 |
+| `archon-paths.ts` | 494 | 全部目录路径工具函数 |
+| `logger.ts` | 119 | Pino logger 工厂 |
 | `bundled-build.ts` | 18 | 构建时常量（二进制 vs 开发） |
-| `strip-cwd-env.ts` | 94 | CWD .env 泄漏 + Claude Code 标记清洗 |
+| `strip-cwd-env.ts` | 110 | CWD .env 泄漏 + Claude Code 标记清洗 |
 | `strip-cwd-env-boot.ts` | 13 | 副作用入口（import 时立即执行） |
-| `update-check.ts` | 154 | GitHub 发布版本检查 + 缓存 |
-| `index.ts` | 46 | 统一导出 |
+| `update-check.ts` | 152 | GitHub 发布版本检查 + 缓存 |
+| `env-loader.ts` | 83 | `~/.archon/.env` 加载（v0.3.x 新增） |
+| `telemetry.ts` | 246 | 匿名遥测/诊断数据收集（v0.3.x 新增） |
+| `index.ts` | 55 | 统一导出 |
 
 ### 3.1.3 Archon 目录结构
 
@@ -155,10 +157,10 @@ Pass 2 — Claude Code 标记
 |------|------|------|
 | `types.ts` | 55 | Branded types + GitResult 联合类型 |
 | `exec.ts` | 23 | `execFileAsync` + `mkdirAsync` 包装器 |
-| `worktree.ts` | 271 | Worktree 操作（创建、删除、列表、查找） |
+| `worktree.ts` | 393 | Worktree 操作（创建、删除、列表、查找、ownership 校验） |
 | `branch.ts` | 351 | 分支操作（checkout、merge 检测、提交） |
 | `repo.ts` | 292 | 仓库操作（clone、sync、远程 URL） |
-| `index.ts` | 50 | 统一导出 |
+| `index.ts` | 51 | 统一导出 |
 
 ### 3.2.3 Branded Types
 
@@ -205,6 +207,7 @@ type GitResult<T> = { ok: true; value: T } | { ok: false; error: GitError };
 | `getCanonicalRepoPath(path)` | 获取规范化的仓库路径 |
 | `extractOwnerRepo(path)` | 从路径提取 owner/repo |
 | `getWorktreeBase(repoPath)` | 获取 worktree 基础目录 |
+| `verifyWorktreeOwnership(worktreePath, expectedRepo)` | 校验 worktree 真正属于预期仓库（v0.3.x 跨克隆守护） |
 
 **分支操作** (`branch.ts`)：
 
@@ -241,11 +244,13 @@ type GitResult<T> = { ok: true; value: T } | { ok: false; error: GitError };
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `packages/paths/src/archon-paths.ts` | 414 | 全部目录路径计算 |
-| `packages/paths/src/logger.ts` | 120 | Pino 结构化日志工厂 |
-| `packages/paths/src/strip-cwd-env.ts` | 94 | CWD 环境变量清洗 |
-| `packages/paths/src/update-check.ts` | 154 | 更新检查 + 缓存 |
+| `packages/paths/src/archon-paths.ts` | 494 | 全部目录路径计算 |
+| `packages/paths/src/logger.ts` | 119 | Pino 结构化日志工厂 |
+| `packages/paths/src/strip-cwd-env.ts` | 110 | CWD 环境变量清洗 |
+| `packages/paths/src/update-check.ts` | 152 | 更新检查 + 缓存 |
+| `packages/paths/src/env-loader.ts` | 83 | `~/.archon/.env` 加载 |
+| `packages/paths/src/telemetry.ts` | 246 | 匿名遥测/诊断数据收集 |
 | `packages/git/src/types.ts` | 55 | Branded types + GitResult |
-| `packages/git/src/worktree.ts` | 271 | Worktree 操作 |
+| `packages/git/src/worktree.ts` | 393 | Worktree 操作 |
 | `packages/git/src/branch.ts` | 351 | 分支操作 |
 | `packages/git/src/repo.ts` | 292 | 仓库操作 |

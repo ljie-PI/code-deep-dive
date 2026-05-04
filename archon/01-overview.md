@@ -28,9 +28,9 @@ Archon 是一个**远程智能体编码平台**（Remote Agentic Coding Platform
 ## 1.3 代码规模
 
 ```
-总计 TypeScript 文件：289 个
-总计代码行数：~96,000 行
-包数量：10 个（含 docs-web）
+总计 TypeScript 文件：331 个（不含 .d.ts）
+总计代码行数：~110,000 行
+包数量：11 个（含 docs-web；v0.3.x 新增独立的 @archon/providers）
 数据库表：8 个
 ```
 
@@ -41,6 +41,7 @@ Archon 是一个**远程智能体编码平台**（Remote Agentic Coding Platform
 graph TD
     paths["@archon/paths<br/>路径解析 + 日志"]
     git["@archon/git<br/>Git 操作"]
+    providers["@archon/providers<br/>AI Provider（Claude/Codex/PI）"]
     isolation["@archon/isolation<br/>Worktree 隔离"]
     workflows["@archon/workflows<br/>工作流引擎"]
     core["@archon/core<br/>业务逻辑 + 数据库"]
@@ -50,6 +51,7 @@ graph TD
     web["@archon/web<br/>React 前端"]
 
     git --> paths
+    providers --> paths
     isolation --> git
     isolation --> paths
     workflows --> git
@@ -58,6 +60,7 @@ graph TD
     core --> isolation
     core --> paths
     core --> workflows
+    core --> providers
     adapters --> core
     adapters --> git
     adapters --> isolation
@@ -67,6 +70,7 @@ graph TD
     server --> git
     server --> paths
     server --> workflows
+    server --> providers
     cli --> server
     cli --> adapters
     cli --> core
@@ -77,6 +81,7 @@ graph TD
 
     style paths fill:#e8f5e9
     style git fill:#e8f5e9
+    style providers fill:#e8f5e9
     style isolation fill:#fff3e0
     style workflows fill:#fff3e0
     style core fill:#e3f2fd
@@ -87,10 +92,12 @@ graph TD
 ```
 
 **依赖方向（从底到顶）：**
-- **基础层**（绿色）：`@archon/paths` → `@archon/git` — 零业务逻辑，纯工具库
+- **基础层**（绿色）：`@archon/paths` → `@archon/git`、`@archon/providers` — 零业务逻辑，纯工具/能力库
 - **引擎层**（橙色）：`@archon/isolation` + `@archon/workflows` — 隔离和工作流核心
-- **业务层**（蓝色）：`@archon/core` — 数据库、AI 客户端、编排器、命令处理
+- **业务层**（蓝色）：`@archon/core` — 数据库、编排器、命令处理（AI Provider 通过 `@archon/providers/registry` 取得）
 - **接口层**（红色/紫色）：`@archon/adapters` + `@archon/server` + `@archon/cli` + `@archon/web`
+
+> v0.3.x 重构亮点：原本位于 `@archon/core/clients/` 的 Claude/Codex 客户端被抽离为独立包 `@archon/providers`，并新增了社区维护的 `pi-coding-agent` Provider（`packages/providers/src/community/pi/`）。`@archon/workflows` 不直接依赖 providers，而是通过 `WorkflowDeps.getAssistantClient()` 注入。
 
 `@archon/web` 是纯前端包，不依赖任何 `@archon/*` 后端包——它通过 OpenAPI 生成的类型（`api.generated.d.ts`）与后端通信。
 
@@ -121,8 +128,13 @@ graph LR
         HandleMsg["handleMessage()"]
         CmdHandler["Command Handler"]
         Orchestrator["Orchestrator"]
-        ClaudeClient["ClaudeClient"]
-        CodexClient["CodexClient"]
+    end
+
+    subgraph Providers["@archon/providers"]
+        Registry["registry.ts<br/>getAgentProvider()"]
+        ClaudeProvider["ClaudeProvider"]
+        CodexProvider["CodexProvider"]
+        PIProvider["PIProvider (community)"]
     end
 
     subgraph Engine["@archon/workflows"]
@@ -149,8 +161,9 @@ graph LR
     Orchestrator --> Router
     Router --> Executor
     Executor --> DAGExec
-    DAGExec --> ClaudeClient & CodexClient
-    Orchestrator --> ClaudeClient & CodexClient
+    DAGExec --> Registry
+    Orchestrator --> Registry
+    Registry --> ClaudeProvider & CodexProvider & PIProvider
 
     CmdHandler & Orchestrator --> DB
     Executor --> DB
@@ -194,21 +207,27 @@ Archon 的核心循环是**消息驱动的**：
 
 ## 1.8 关键文件索引（Top 20 by 代码行数）
 
+> 行数为 v0.3.10（HEAD `88d01099`）快照。
+
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `packages/workflows/src/dag-executor.ts` | 3,036 | DAG 工作流执行引擎 |
-| `packages/server/src/routes/api.ts` | 2,623 | REST API 路由定义 |
-| `packages/cli/src/commands/setup.ts` | 1,630 | CLI 交互式设置向导 |
-| `packages/core/src/orchestrator/orchestrator-agent.ts` | 1,387 | AI 会话编排器 |
+| `packages/workflows/src/dag-executor.ts` | 3,184 | DAG 工作流执行引擎 |
+| `packages/server/src/routes/api.ts` | 2,698 | REST API 路由定义 |
+| `packages/cli/src/commands/setup.ts` | 1,928 | CLI 交互式设置向导 |
+| `packages/core/src/orchestrator/orchestrator-agent.ts` | 1,557 | AI 会话编排器 |
+| `packages/isolation/src/providers/worktree.ts` | 1,227 | Worktree 隔离提供者 |
 | `packages/core/src/handlers/command-handler.ts` | 1,150 | 斜杠命令处理 |
-| `packages/isolation/src/providers/worktree.ts` | 1,017 | Worktree 隔离提供者 |
-| `packages/cli/src/commands/workflow.ts` | 1,004 | CLI workflow 子命令 |
+| `packages/cli/src/commands/workflow.ts` | 1,129 | CLI workflow 子命令 |
+| `packages/providers/src/claude/provider.ts` | 1,055 | Claude Provider（v0.3.x 抽离） |
+| `packages/core/src/db/workflows.ts` | 1,007 | 工作流数据库操作 |
 | `packages/adapters/src/forge/github/adapter.ts` | 952 | GitHub 适配器 |
-| `packages/core/src/db/workflows.ts` | 930 | 工作流数据库操作 |
 | `packages/adapters/src/community/forge/gitea/adapter.ts` | 912 | Gitea 适配器 |
+| `packages/workflows/src/executor.ts` | 831 | 工作流执行协调器 |
 | `packages/adapters/src/community/forge/gitlab/adapter.ts` | 798 | GitLab 适配器 |
-| `packages/server/src/index.ts` | 749 | 服务器启动和适配器初始化 |
-| `packages/workflows/src/executor.ts` | 719 | 工作流执行协调器 |
-| `packages/workflows/src/validator.ts` | 612 | 资源验证（命令/MCP/技能） |
-| `packages/workflows/src/schemas/dag-node.ts` | 608 | DAG 节点 Zod schema |
-| `packages/cli/src/cli.ts` | 593 | CLI 入口和命令分发 |
+| `packages/server/src/index.ts` | 729 | 服务器启动和适配器初始化 |
+| `packages/workflows/src/validator.ts` | 680 | 资源验证（命令/MCP/技能） |
+| `packages/providers/src/codex/provider.ts` | 665 | Codex Provider（v0.3.x 抽离） |
+| `packages/cli/src/cli.ts` | 659 | CLI 入口和命令分发 |
+| `packages/workflows/src/schemas/dag-node.ts` | 638 | DAG 节点 Zod schema |
+| `packages/isolation/src/resolver.ts` | 561 | 6 步隔离解析引擎 |
+| `packages/web/src/lib/api.ts` | 529 | 前端 REST 客户端 |

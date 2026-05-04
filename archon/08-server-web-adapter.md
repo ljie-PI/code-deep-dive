@@ -33,25 +33,26 @@ graph TD
 
 ## 8.2 服务器启动流程
 
-`index.ts`（750 行）的 `startServer()` 启动序列：
+`index.ts`（729 行）的 `startServer()` 启动序列：
 
 ```
 1. 环境变量清洗（strip-cwd-env-boot）
 2. 加载 .env（开发模式：repo root；二进制模式：~/.archon/.env）
-3. 验证 AI 凭证（至少一种 Claude 或 Codex 凭证）
-4. 测试数据库连接
-5. 加载配置 + 启动环境泄漏扫描
-6. 启动清理调度器
-7. 标记孤立的工作流运行为失败
-8. 初始化 ConversationLockManager
-9. 创建 Web 适配器（SSETransport + Persistence + WorkflowEventBridge）
-10. 初始化平台适配器（条件启动）
-11. 创建 Hono 应用 + 注册 API 路由
-12. 注册 Webhook 端点（GitHub/Gitea/GitLab）
-13. 注册健康检查端点
-14. 服务 Web UI 静态文件
-15. 启动 Bun.serve()
-16. 注册 SIGINT/SIGTERM 优雅关闭
+3. registerBuiltinProviders() + registerCommunityProviders()（v0.3.x）
+4. 验证 AI 凭证（至少一种 Claude 或 Codex 凭证）
+5. 测试数据库连接
+6. 加载配置
+7. 启动清理调度器
+8. 标记孤立的工作流运行为失败
+9. 初始化 ConversationLockManager
+10. 创建 Web 适配器（SSETransport + Persistence + WorkflowEventBridge）
+11. 初始化平台适配器（条件启动）
+12. 创建 Hono 应用 + 注册 API 路由
+13. 注册 Webhook 端点（GitHub/Gitea/GitLab）
+14. 注册健康检查端点
+15. 服务 Web UI 静态文件
+16. 启动 Bun.serve()
+17. 注册 SIGINT/SIGTERM 优雅关闭
 ```
 
 ## 8.3 SSE 实时推送
@@ -117,7 +118,7 @@ class WorkflowEventBridge {
 
 ## 8.6 REST API 路由
 
-`routes/api.ts`（2,623 行）定义了所有 REST API，使用 `@hono/zod-openapi` 实现类型安全和 OpenAPI 文档生成。
+`routes/api.ts`（2,698 行）定义了所有 REST API，使用 `@hono/zod-openapi` 实现类型安全和 OpenAPI 文档生成。
 
 ### 主要 API 端点
 
@@ -134,7 +135,7 @@ class WorkflowEventBridge {
 | GET | `/api/codebases` | 列出代码库 |
 | GET | `/api/codebases/:id` | 获取代码库详情 |
 | POST | `/api/codebases` | 注册代码库 |
-| PATCH | `/api/codebases/:id` | 更新（env-leak 同意） |
+| PATCH | `/api/codebases/:id` | 更新（含 `allow_env_keys` 同意位） |
 | DELETE | `/api/codebases/:id` | 删除代码库 |
 | **工作流** | | |
 | GET | `/api/workflows` | 列出工作流 |
@@ -146,6 +147,8 @@ class WorkflowEventBridge {
 | POST | `/api/workflows/runs/:id/resume` | 恢复失败的运行 |
 | POST | `/api/workflows/runs/:id/abandon` | 放弃运行 |
 | DELETE | `/api/workflows/runs/:id` | 删除运行记录 |
+| **Provider**（v0.3.x 新增） | | |
+| GET | `/api/providers` | 列出已注册的 Provider 与 capabilities |
 | **命令** | | |
 | GET | `/api/commands` | 列出命令 |
 | **产物** | | |
@@ -211,9 +214,11 @@ SIGINT/SIGTERM →
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `packages/server/src/routes/api.ts` | 2,623 | REST API 路由定义 |
-| `packages/server/src/index.ts` | 749 | 服务器启动和适配器初始化 |
-| `packages/server/src/adapters/web/transport.ts` | ~200 | SSE 连接管理 |
-| `packages/server/src/adapters/web/persistence.ts` | ~200 | 消息缓冲持久化 |
-| `packages/server/src/adapters/web/workflow-bridge.ts` | ~100 | 工作流事件桥 |
-| `packages/server/src/adapters/web/index.ts` | ~150 | WebAdapter 实现 |
+| `packages/server/src/routes/api.ts` | 2,698 | REST API 路由定义 |
+| `packages/server/src/index.ts` | 729 | 服务器启动和适配器初始化 |
+| `packages/server/src/adapters/web.ts` | 345 | WebAdapter 实现（单文件，对外导出 `IWebPlatformAdapter`） |
+| `packages/server/src/adapters/web/transport.ts` | 302 | SSE 连接管理 |
+| `packages/server/src/adapters/web/persistence.ts` | 344 | 消息缓冲持久化 |
+| `packages/server/src/adapters/web/workflow-bridge.ts` | 263 | 工作流事件桥 |
+| `packages/server/src/routes/openapi-defaults.ts` | 15 | OpenAPI 公共组件/默认响应 |
+| `packages/server/src/routes/schemas/` | — | Zod schema 拆分目录（codebase/conversation/workflow/provider/system/common/config）|

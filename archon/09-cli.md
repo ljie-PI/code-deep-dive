@@ -26,8 +26,10 @@ archon
 ├── validate
 │   ├── workflows [name]              # 验证工作流
 │   └── commands [name]               # 验证命令
+├── skill
+│   └── install [name]                # 安装 Claude Skill（v0.3.10 新增，PR #1445）
 ├── serve [--port] [--download-only]  # 启动 Web UI
-├── version                           # 版本信息
+├── version                           # 版本信息（也兼容 `--version` / `-V` / `-v`，PR #1444）
 └── help                              # 帮助
 ```
 
@@ -36,15 +38,16 @@ archon
 ```
 1. import '@archon/paths/strip-cwd-env-boot'  — 第一个 import，清洗环境
 2. 加载 ~/.archon/.env（override: true）
-3. 智能 Claude 认证默认值
-4. 解析命令行参数（util.parseArgs）
-5. 路由到具体命令
-6. 最后关闭数据库连接
+3. registerBuiltinProviders() + registerCommunityProviders()  — 注册 AI Provider（v0.3.x）
+4. 智能 Claude 认证默认值
+5. 解析命令行参数（util.parseArgs）
+6. 路由到具体命令
+7. 最后关闭数据库连接
 ```
 
 ## 9.3 workflow run — 核心命令
 
-`workflowRunCommand()` 是最复杂的 CLI 命令（`commands/workflow.ts`, ~1004 行）：
+`workflowRunCommand()` 是最复杂的 CLI 命令（`commands/workflow.ts`, 1,129 行）：
 
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%
@@ -58,7 +61,7 @@ flowchart TD
     LoadFailed --> ResumeRun["恢复执行（跳过已完成节点）"]
 
     CheckResume -->|否| Register["自动注册仓库（如需要）"]
-    Register --> EnvLeak["env-leak-gate 检查"]
+    Register --> EnvLeak["allow_env_keys 检查（v0.3.x：仅校验同意位，不再扫描）"]
     EnvLeak --> CreateConv["创建 CLI 会话"]
     CreateConv --> Isolation{"创建隔离？"}
 
@@ -101,7 +104,7 @@ archon continue fix/issue-42 --workflow archon-smart-pr-review "Review changes"
 
 ## 9.5 setup — 交互式设置
 
-`commands/setup.ts`（1,630 行——第三大文件）实现了完整的设置向导：
+`commands/setup.ts`（1,928 行——第三大文件）实现了完整的设置向导：
 
 - AI 凭证配置（Claude API key / OAuth、Codex tokens）
 - 平台适配器配置（Telegram、Discord、Slack、GitHub）
@@ -125,7 +128,7 @@ CLI 生成的会话 ID：`cli-{timestamp}-{random6}`
 
 ## 9.8 CLIAdapter
 
-`adapters/cli-adapter.ts` 实现 `IPlatformAdapter`：
+`@archon/cli` 内的 CLIAdapter 实现 `IPlatformAdapter`：
 - `sendMessage()` → 写入 stdout
 - `getStreamingMode()` → 默认 `'batch'`
 - `getPlatformType()` → `'cli'`
@@ -135,9 +138,13 @@ CLI 生成的会话 ID：`cli-{timestamp}-{random6}`
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `packages/cli/src/commands/setup.ts` | 1,630 | 交互式设置向导 |
-| `packages/cli/src/commands/workflow.ts` | 1,004 | workflow 子命令 |
-| `packages/cli/src/cli.ts` | 594 | CLI 入口和命令分发 |
-| `packages/cli/src/commands/isolation.ts` | ~200 | isolation 子命令 |
-| `packages/cli/src/commands/continue.ts` | ~150 | continue 命令 |
-| `packages/cli/src/commands/serve.ts` | ~100 | serve 命令 |
+| `packages/cli/src/commands/setup.ts` | 1,928 | 交互式设置向导 |
+| `packages/cli/src/commands/workflow.ts` | 1,129 | workflow 子命令 |
+| `packages/cli/src/cli.ts` | 659 | CLI 入口和命令分发 |
+| `packages/cli/src/commands/isolation.ts` | 344 | isolation 子命令 |
+| `packages/cli/src/commands/validate.ts` | 268 | validate 子命令 |
+| `packages/cli/src/commands/continue.ts` | 249 | continue 命令 |
+| `packages/cli/src/commands/serve.ts` | 186 | serve 命令 |
+| `packages/cli/src/commands/version.ts` | 101 | version 命令（兼容 `--version`/`-V`/`-v`） |
+| `packages/cli/src/commands/skill.ts` | 69 | `skill install`（v0.3.10 PR #1445） |
+| `packages/cli/src/commands/chat.ts` | 19 | `chat` 命令 |

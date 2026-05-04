@@ -35,12 +35,20 @@ packages/web/src/
 ├── index.css                  # Tailwind 入口
 ├── lib/
 │   ├── api.ts                 # REST API 客户端
-│   ├── api.generated.d.ts     # 从 OpenAPI 生成的类型（2,575 行）
+│   ├── api.generated.d.ts     # 从 OpenAPI 生成的类型（2,584 行）
 │   └── utils.ts               # 工具函数
 ├── stores/
 │   └── workflow-store.ts      # Zustand 工作流状态
 ├── hooks/
-│   └── useSSE.ts             # SSE 自定义 Hook
+│   ├── useSSE.ts              # 通用 SSE Hook
+│   ├── useDashboardSSE.ts     # 仪表板 SSE
+│   ├── useProviders.ts        # /api/providers 拉取
+│   ├── useAutoScroll.ts       # 聊天自动滚动
+│   ├── useClickOutside.ts     # 点击外部关闭
+│   ├── useKeyboardShortcuts.ts# 全局快捷键
+│   ├── useBuilderUndo.ts      # 工作流构建器撤销栈
+│   ├── useBuilderKeyboard.ts  # 构建器快捷键
+│   └── useBuilderValidation.ts# 构建器实时验证
 ├── contexts/                  # React Context Providers
 ├── routes/                    # 页面组件
 │   ├── ChatPage.tsx
@@ -140,14 +148,16 @@ bun run dev:server
 bun --filter @archon/web generate:types
 ```
 
-生成的 `api.generated.d.ts`（2,575 行）包含所有 API 请求/响应类型。`WorkflowRunStatus`、`WorkflowDefinition`、`DagNode` 等类型都从这里派生。
+生成的 `api.generated.d.ts`（2,584 行）包含所有 API 请求/响应类型。`WorkflowRunStatus`、`WorkflowDefinition`、`DagNode` 等类型都从这里派生。
 
 ## 10.8 本章关键文件
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `packages/web/src/lib/api.generated.d.ts` | 2,575 | 生成的 API 类型 |
-| `packages/web/src/App.tsx` | ~80 | 路由配置 |
-| `packages/web/src/stores/workflow-store.ts` | ~200 | Zustand 工作流状态 |
-| `packages/web/src/hooks/useSSE.ts` | ~100 | SSE 自定义 Hook |
-| `packages/web/src/lib/api.ts` | ~300 | REST API 客户端 |
+| `packages/web/src/lib/api.generated.d.ts` | 2,584 | 生成的 API 类型 |
+| `packages/web/src/lib/api.ts` | 529 | REST API 客户端 |
+| `packages/web/src/stores/workflow-store.ts` | 416 | Zustand 工作流状态 |
+| `packages/web/src/hooks/useSSE.ts` | 259 | 通用 SSE Hook |
+| `packages/web/src/App.tsx` | 87 | 路由配置 |
+| `packages/web/src/hooks/useDashboardSSE.ts` | 48 | 仪表板专用 SSE |
+| `packages/web/src/hooks/useProviders.ts` | 24 | `/api/providers` 数据获取 |

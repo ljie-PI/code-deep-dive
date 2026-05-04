@@ -121,10 +121,12 @@ interface IWebPlatformAdapter extends IPlatformAdapter {
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `packages/adapters/src/forge/github/adapter.ts` | 952 | GitHub 适配器 |
-| `packages/adapters/src/community/forge/gitea/adapter.ts` | 912 | Gitea 适配器 |
-| `packages/adapters/src/community/forge/gitlab/adapter.ts` | 798 | GitLab 适配器 |
-| `packages/adapters/src/chat/telegram/` | ~400 | Telegram 适配器 |
-| `packages/adapters/src/chat/slack/` | ~400 | Slack 适配器 |
-| `packages/adapters/src/community/chat/discord/` | ~350 | Discord 适配器 |
-| `packages/core/src/types/index.ts` | 384 | IPlatformAdapter 接口定义 |
+| `packages/adapters/src/forge/github/adapter.ts` | 952 | GitHub 适配器（官方维护） |
+| `packages/adapters/src/community/forge/gitea/adapter.ts` | 912 | Gitea 适配器（社区维护） |
+| `packages/adapters/src/community/forge/gitlab/adapter.ts` | 798 | GitLab 适配器（社区维护） |
+| `packages/adapters/src/chat/telegram/` | — | Telegram 适配器（官方维护） |
+| `packages/adapters/src/chat/slack/` | — | Slack 适配器（官方维护） |
+| `packages/adapters/src/community/chat/discord/` | — | Discord 适配器（社区维护） |
+| `packages/core/src/types/index.ts` | 194 | IPlatformAdapter 接口定义 |
+
+> **目录约定**：`packages/adapters/src/chat/` 与 `packages/adapters/src/forge/` 下的适配器由 Archon 团队维护；`packages/adapters/src/community/` 下（含各自的 `README.md`）由社区维护，发版/质量保证级别可能更低。

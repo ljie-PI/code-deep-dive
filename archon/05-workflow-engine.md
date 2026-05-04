@@ -4,15 +4,16 @@
 
 ## 5.1 架构总览
 
-`@archon/workflows` 是 Archon 的核心价值所在。它只依赖 `@archon/git` 和 `@archon/paths`，通过依赖注入（`WorkflowDeps`）接收数据库和 AI 客户端——因此与 `@archon/core` 无循环依赖。
+`@archon/workflows` 是 Archon 的核心价值所在。它只依赖 `@archon/git` 和 `@archon/paths`，通过依赖注入（`WorkflowDeps`）接收数据库和 AI Provider 工厂——因此与 `@archon/core` 和 `@archon/providers` 都无循环依赖。
 
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%
 graph TD
     subgraph Discovery["发现 & 加载"]
         WorkflowDiscovery["workflow-discovery.ts<br/>文件系统扫描"]
+        ScriptDiscovery["script-discovery.ts<br/>script: 节点的脚本解析"]
         Loader["loader.ts<br/>YAML 解析 + Zod 验证"]
-        Defaults["defaults/<br/>内置默认工作流"]
+        Defaults["defaults/<br/>内置默认工作流（bundled-defaults.ts）"]
     end
 
     subgraph Routing["路由"]
@@ -21,22 +22,24 @@ graph TD
 
     subgraph Execution["执行"]
         Executor["executor.ts<br/>工作流编排器"]
-        DAGExecutor["dag-executor.ts (3,036行)<br/>DAG 调度引擎"]
+        DAGExecutor["dag-executor.ts (3,184行)<br/>DAG 调度引擎"]
         ExecutorShared["executor-shared.ts<br/>变量替换 + 错误分类"]
     end
 
     subgraph Support["支撑"]
-        Schemas["schemas/<br/>Zod 类型定义"]
+        Schemas["schemas/<br/>Zod 类型定义（dag-node/workflow/workflow-run/loop/retry/hooks）"]
         Store["store.ts<br/>IWorkflowStore 接口"]
         Deps["deps.ts<br/>WorkflowDeps 注入类型"]
         EventEmitter["event-emitter.ts<br/>可观测性事件"]
         Logger["logger.ts<br/>JSONL 文件日志"]
         Validator["validator.ts<br/>资源验证"]
+        ValParser["validation-parser.ts<br/>校验输出解析"]
+        CmdVal["command-validation.ts<br/>命令文件校验入口"]
         CondEval["condition-evaluator.ts<br/>when 条件求值"]
-        ModelVal["model-validation.ts<br/>提供者/模型兼容性"]
     end
 
     WorkflowDiscovery --> Loader --> Schemas
+    ScriptDiscovery --> Loader
     Router --> Loader
     Router --> Executor
     Executor --> DAGExecutor
@@ -45,6 +48,8 @@ graph TD
     DAGExecutor --> EventEmitter
     DAGExecutor --> Logger
     DAGExecutor --> CondEval
+    Validator --> ValParser
+    Validator --> CmdVal
     Executor --> Store
 ```
 
@@ -52,21 +57,29 @@ graph TD
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `dag-executor.ts` | 3,036 | DAG 执行引擎（最大文件） |
-| `executor.ts` | 719 | 工作流执行协调器 |
-| `validator.ts` | 612 | 命令文件/MCP/技能目录验证 |
-| `executor-shared.ts` | 413 | 变量替换、错误分类、命令加载 |
-| `loader.ts` | 412 | YAML 解析和验证 |
-| `workflow-discovery.ts` | 307 | 文件系统工作流发现 |
-| `deps.ts` | 277 | WorkflowDeps 注入类型 |
+| `dag-executor.ts` | 3,184 | DAG 执行引擎（最大文件） |
+| `executor.ts` | 831 | 工作流执行协调器 |
+| `validator.ts` | 680 | 命令文件/MCP/技能目录验证 |
+| `executor-shared.ts` | 532 | 变量替换、错误分类、命令加载 |
+| `loader.ts` | 504 | YAML 解析和验证 |
+| `workflow-discovery.ts` | 372 | 文件系统工作流发现 |
 | `router.ts` | 266 | 工作流意图路由和名称解析 |
 | `event-emitter.ts` | 261 | 可观测性事件系统 |
 | `logger.ts` | 237 | JSONL 文件日志 |
-| `condition-evaluator.ts` | 173 | `when:` 条件表达式求值 |
-| `store.ts` | 94 | IWorkflowStore 接口 |
-| `model-validation.ts` | 16 | 提供者/模型兼容性检查 |
-| `schemas/dag-node.ts` | 608 | DAG 节点 Zod schema |
-| `schemas/workflow.ts` | 120 | 工作流定义 schema |
+| `condition-evaluator.ts` | 174 | `when:` 条件表达式求值 |
+| `script-discovery.ts` | 170 | `script:` 节点脚本发现/选择 |
+| `deps.ts` | 115 | WorkflowDeps 注入类型（v0.3.x 大幅瘦身） |
+| `store.ts` | 113 | IWorkflowStore 接口 |
+| `validation-parser.ts` | 64 | 校验输出解析 |
+| `command-validation.ts` | 15 | 命令文件校验封装 |
+| `schemas/dag-node.ts` | 638 | DAG 节点 Zod schema |
+| `schemas/workflow-run.ts` | 169 | 工作流运行状态 schema |
+| `schemas/workflow.ts` | 162 | 工作流定义 schema |
+| `schemas/index.ts` | 121 | schemas 统一导出 |
+| `schemas/hooks.ts` | 88 | Claude SDK hooks schema |
+| `schemas/loop.ts` | 33 | loop 节点 schema |
+| `schemas/retry.ts` | 23 | retry 配置 schema |
+| `defaults/bundled-defaults.ts` | — | 内置默认工作流（`generate:bundled` 自动生成） |
 
 ## 5.3 工作流定义格式
 
@@ -205,6 +218,8 @@ YAML 文件 → yaml.parse() → dagNodeSchema.safeParse() 验证每个节点
 - Codex 模型：除 Claude 别名外的任何模型
 - 不兼容组合在 `parseWorkflow()` 阶段即失败
 
+> v0.3.x 起，provider/model 兼容性的真正实现已移到 `@archon/providers/registry.ts` 中（每个 provider 实现 `capabilities.ts` 描述自己支持的模型），workflows 层通过 `WorkflowDeps.getProviderCapabilities?.()` 注入查询。
+
 ## 5.6 路由器
 
 `router.ts` 负责将用户消息匹配到工作流。
@@ -235,7 +250,7 @@ YAML 文件 → yaml.parse() → dagNodeSchema.safeParse() 验证每个节点
 
 ## 5.7 DAG 执行器
 
-`dag-executor.ts`（3,036 行）是最复杂的文件，实现了完整的 DAG 调度引擎。
+`dag-executor.ts`（3,184 行）是最复杂的文件，实现了完整的 DAG 调度引擎。
 
 ### 执行模型
 
@@ -374,17 +389,30 @@ Layer 3: [create-pr]
 
 ## 5.8 依赖注入
 
-`@archon/workflows` 通过 `WorkflowDeps` 接口接收所有外部依赖：
+`@archon/workflows` 通过 `WorkflowDeps` 接口接收所有外部依赖（`deps.ts`，115 行）：
 
 ```typescript
-interface WorkflowDeps {
-  store: IWorkflowStore;          // 数据库操作
-  getAssistantClient: (type: string) => IAssistantClient;  // AI 客户端工厂
-  loadConfig: (cwd: string) => Promise<MergedConfig>;      // 配置加载
+import type {
+  IAgentProvider,
+  ProviderCapabilities,
+  ProviderDefaultsMap,
+} from '@archon/providers/types';
+
+export type AgentProviderFactory = (provider: string) => IAgentProvider;
+
+export interface WorkflowDeps {
+  store: IWorkflowStore;
+  // AI Provider 工厂 — 由 @archon/core 包装 @archon/providers 的 getAgentProvider
+  getAgentProvider: AgentProviderFactory;
+  loadConfig: (cwd: string) => Promise<WorkflowConfig>;
 }
 ```
 
-`@archon/core` 提供 `createWorkflowDeps()` 适配器来桥接核心数据库到 `IWorkflowStore` 接口。
+设计要点：
+
+- **不再有"mirror copies"**：v0.3.x 起 `IAgentProvider`、`MessageChunk`、`SendQueryOptions`、`ProviderCapabilities` 等类型从 `@archon/providers/types` 直接导入并 re-export，避免重复声明导致的类型漂移
+- **`@archon/core`** 提供适配器把核心数据库桥接到 `IWorkflowStore`，并把 `@archon/providers/registry.getAgentProvider()` 桥接到 `getAgentProvider`
+- 旧名 `getAssistantClient` 已废弃，仍可见的 `WorkflowTokenUsage` 等别名仅为向后兼容
 
 ## 5.9 可观测性
 

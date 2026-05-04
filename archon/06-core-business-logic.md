@@ -1,22 +1,30 @@
-# 第六章：核心业务逻辑 — @archon/core
+# 第六章：核心业务逻辑 — @archon/core 与 @archon/providers
 
-> 编排器、AI 客户端、命令处理、数据库操作——所有业务逻辑的中枢。
+> 编排器、命令处理、数据库操作——`@archon/core` 是连接一切的中间层；AI Provider 在 v0.3.x 重构后已从 core 抽离为独立的 `@archon/providers` 包。
 
 ## 6.1 职责
 
-`@archon/core` 是连接一切的中间层：
+`@archon/core`：
 
 - **Orchestrator**：管理 AI 对话，路由消息到工作流或直接 AI 会话
-- **AI Clients**：Claude Agent SDK 和 Codex SDK 的适配器
 - **Command Handler**：处理斜杠命令（`/clone`、`/workflow`、`/status` 等）
 - **Database**：所有数据库操作的封装
-- **Services**：后台清理任务
+- **Services**：后台清理、标题生成
 - **State**：Session 状态机
+- **Operations**：跨包的高层操作（`isolation-operations`、`workflow-operations`）
 - **Workflow Store Adapter**：桥接 core DB 到 `@archon/workflows` 的 `IWorkflowStore`
+
+`@archon/providers`（v0.3.x 新增独立包）：
+
+- **Provider Registry**：`getAgentProvider(type)` 工厂函数
+- **ClaudeProvider**：封装 `@anthropic-ai/claude-agent-sdk`
+- **CodexProvider**：封装 `@openai/codex-sdk`
+- **PIProvider**（社区）：基于 `@mariozechner/pi-coding-agent`
+- 二进制解析（`binary-resolver.ts`）、能力声明（`capabilities.ts`）
 
 ## 6.2 核心流程：handleMessage()
 
-`handleMessage()`（`orchestrator-agent.ts:~line 1`）是系统的中央入口点。所有平台消息最终都流经此函数。
+`handleMessage()`（`orchestrator-agent.ts`）是系统的中央入口点。所有平台消息最终都流经此函数。
 
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%
@@ -40,10 +48,10 @@ flowchart TD
     Matched -->|否| DirectAI["直接 AI 对话<br/>（archon-assist 兜底）"]
 
     ExecWF --> Executor["Workflow Executor"]
-    DirectAI --> AIClient["AI Client<br/>sendQuery()"]
+    DirectAI --> Provider["@archon/providers<br/>getAgentProvider().sendQuery()"]
 
     Executor --> Stream["流式响应→平台"]
-    AIClient --> Stream
+    Provider --> Stream
 ```
 
 ### 关键步骤
@@ -54,23 +62,24 @@ flowchart TD
 4. **路由决策**：
    - 斜杠命令 → `handleCommand()` 处理
    - 自然语言 → Router 分析意图 → 匹配工作流或直接 AI 对话
-5. **执行**：调用工作流执行器或 AI 客户端
+5. **执行**：调用工作流执行器或 `@archon/providers` Provider
 6. **流式响应**：通过 `platform.sendMessage()` 流式推送给用户
 
-## 6.3 AI 客户端
+## 6.3 AI Provider（@archon/providers）
 
-### IAssistantClient 接口
+### IAgentProvider 接口
 
 ```typescript
-interface IAssistantClient {
+interface IAgentProvider {
   sendQuery(
     prompt: string,
     cwd: string,
     resumeSessionId?: string,
-    options?: AssistantRequestOptions
+    options?: SendQueryOptions
   ): AsyncGenerator<MessageChunk>;
 
   getType(): string;
+  getCapabilities(): ProviderCapabilities;
 }
 ```
 
@@ -87,9 +96,9 @@ interface IAssistantClient {
 | `rate_limit` | 速率限制信息 |
 | `workflow_dispatch` | 工作流分派 |
 
-### ClaudeClient
+### ClaudeProvider
 
-`clients/claude.ts`（~500 行）封装 `@anthropic-ai/claude-agent-sdk`：
+`packages/providers/src/claude/provider.ts`（**1,055** 行）封装 `@anthropic-ai/claude-agent-sdk`：
 
 - 使用 `query()` API 启动 Claude Code SDK subprocess
 - 配置 `permissionMode: 'bypassPermissions'`（无人值守运行）
@@ -97,27 +106,38 @@ interface IAssistantClient {
 - 环境变量注入（`buildSubprocessEnv()`）
 - 支持 MCP 服务器配置、工具白/黑名单、结构化输出
 - 流式解析 SDK 事件 → 转换为 `MessageChunk`
+- 二进制解析：`binary-resolver.ts` 在编译二进制中优先选择 glibc 变体（fix #1521）
 
-### CodexClient
+> **已知缺口**：`provider.ts:921` 留有 `TODO(#1135)` — 旧版的"Pre-spawn env-leak gate"在 provider 抽离时被移除，目前只剩数据库层面的 `allow_env_keys` 标志位，运行时不再做主动拦截。
 
-`clients/codex.ts`（~400 行）封装 `@openai/codex-sdk`：
+### CodexProvider
+
+`packages/providers/src/codex/provider.ts`（**665** 行）封装 `@openai/codex-sdk`：
 
 - 使用 Codex SDK 的 turn-based API
 - 支持 `modelReasoningEffort`、`webSearchMode`
 - 支持 Session resume
 - 支持 `additionalDirectories` 和 `codexBinaryPath` 配置
+- 二进制解析：`binary-resolver.ts` + `binary-guard.ts` 防止误用错误架构
 
-### 客户端工厂
+### PIProvider（社区）
+
+`packages/providers/src/community/pi/`：基于 `@mariozechner/pi-coding-agent`，主要由社区维护，懒加载（`provider-lazy-load.ts`）以避免冷启动成本。
+
+### Provider Registry
 
 ```typescript
-function getAssistantClient(type: string): IAssistantClient {
-  switch (type) {
-    case 'claude': return new ClaudeClient();
-    case 'codex': return new CodexClient();
-    default: throw new Error(`Unknown assistant type: ${type}`);
-  }
-}
+// packages/providers/src/registry.ts
+export function registerProvider(entry: ProviderRegistration): void;
+export function getAgentProvider(id: string): IAgentProvider;
+export function getProviderInfo(id: string): ProviderInfo;
+export function listProviders(): ProviderInfo[];
+
+// 启动时由 server / CLI 调用一次
+export function registerBuiltinProviders(): void;
 ```
+
+调用方（server `index.ts`、CLI `cli.ts`）必须在进程入口先调用 `registerBuiltinProviders()`，之后所有查找走 registry。这样把"哪些 provider 可用"变成显式注册过程，便于社区 provider 按需加载。
 
 ## 6.4 命令处理器
 
@@ -208,7 +228,7 @@ interface GlobalConfig {
 
 ### Cleanup Service
 
-`services/cleanup-service.ts`（~400 行）定期清理过期资源：
+`services/cleanup-service.ts`（697 行）定期清理过期资源：
 
 - **Session 清理**：删除超过 `SESSION_RETENTION_DAYS`（默认 30 天）的非活跃 Session
 - **隔离环境清理**：清理不再被引用的已销毁环境
@@ -241,11 +261,13 @@ function createWorkflowStore(): IWorkflowStore {
 |------|------|------|
 | `ConversationLockManager` | `utils/conversation-lock.ts` | 控制每个会话的并发访问 |
 | `classifyAndFormatError()` | `utils/error-formatter.ts` | 格式化用户友好的错误消息 |
-| `scanPathForSensitiveKeys()` | `utils/env-leak-scanner.ts` | 扫描 .env 文件中的敏感密钥 |
 | `getLinkedIssueNumbers()` | `utils/github-graphql.ts` | GitHub GraphQL 查询关联 issue |
 | `getPort()` | `utils/port-allocation.ts` | Worktree 感知的端口分配 |
 | `syncArchonToWorktree()` | `utils/worktree-sync.ts` | 同步 .archon/ 到 worktree |
 | `sanitizeCredentials()` | `utils/credential-sanitizer.ts` | 清洗日志中的凭证 |
+| `validatePath()` | `utils/path-validation.ts` | 路径安全校验 |
+
+> **已删除**：旧版 `utils/env-leak-scanner.ts`（`scanPathForSensitiveKeys()`）已在 v0.3.x provider 抽离时移除（参见 `providers/claude/provider.ts:921` `TODO(#1135)`）。`allow_env_keys` 数据库字段仍保留，但运行时不再做主动扫描/拦截。
 
 ### ConversationLockManager
 
@@ -266,12 +288,17 @@ await lockManager.acquireLock(conversationId, async () => {
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `packages/core/src/orchestrator/orchestrator-agent.ts` | 1,387 | AI 会话编排器 |
+| `packages/core/src/orchestrator/orchestrator-agent.ts` | 1,557 | AI 会话编排器 |
 | `packages/core/src/handlers/command-handler.ts` | 1,150 | 斜杠命令处理 |
-| `packages/core/src/db/workflows.ts` | 930 | 工作流数据库操作 |
-| `packages/core/src/clients/claude.ts` | ~500 | Claude Agent SDK 客户端 |
-| `packages/core/src/clients/codex.ts` | ~400 | Codex SDK 客户端 |
-| `packages/core/src/services/cleanup-service.ts` | ~400 | 后台清理服务 |
-| `packages/core/src/types/index.ts` | 383 | 核心类型定义 |
-| `packages/core/src/db/conversations.ts` | ~300 | 会话数据库操作 |
-| `packages/core/src/workflows/store-adapter.ts` | ~150 | Workflow Store 适配器 |
+| `packages/core/src/db/workflows.ts` | 1,007 | 工作流数据库操作 |
+| `packages/providers/src/claude/provider.ts` | 1,055 | ClaudeProvider（v0.3.x 抽离） |
+| `packages/providers/src/codex/provider.ts` | 665 | CodexProvider（v0.3.x 抽离） |
+| `packages/providers/src/community/pi/provider.ts` | 483 | PIProvider（社区） |
+| `packages/providers/src/registry.ts` | 161 | Provider 注册表 |
+| `packages/core/src/services/cleanup-service.ts` | 697 | 后台清理服务 |
+| `packages/core/src/orchestrator/orchestrator.ts` | 482 | Orchestrator 实例与生命周期 |
+| `packages/core/src/handlers/clone.ts` | 357 | `/clone` 命令实现 |
+| `packages/core/src/db/conversations.ts` | 259 | 会话数据库操作 |
+| `packages/core/src/orchestrator/prompt-builder.ts` | 213 | 系统提示构建 |
+| `packages/core/src/types/index.ts` | 194 | 核心类型定义（IPlatformAdapter 等） |
+| `packages/core/src/workflows/store-adapter.ts` | 75 | Workflow Store 适配器 |
